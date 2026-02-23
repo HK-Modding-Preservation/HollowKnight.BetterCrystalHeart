@@ -1,4 +1,5 @@
 ﻿using Satchel.BetterMenus;
+using System;
 
 namespace BetterCrystalHeart
 {
@@ -15,7 +16,7 @@ namespace BetterCrystalHeart
         public static MenuScreen CreateMenuScreen(MenuScreen modListMenu)
         {
             // Declare the menu
-            menu = new Menu("Exaltation Expanded Options", new Element[] { });
+            menu = new Menu("Better Crystal Heart Options", new Element[] { });
 
             // Populate main menu
             CustomSlider timeSlider = new CustomSlider("Charge Time Modifier",
@@ -30,6 +31,11 @@ namespace BetterCrystalHeart
                                                         100);
             menu.AddElement(timeSlider);
             menu.AddElement(damageSlider);
+            menu.AddElement(new HorizontalOption("Dynamic Damage Bonus",
+                                "Synergy applied based on Dynamic Crystal Dash",
+                                MenuValues(),
+                                value => BetterCrystalHeart.globalSettings.DynamicModifier = Convert.ToBoolean(value),
+                                () => Convert.ToInt32(BetterCrystalHeart.globalSettings.DynamicModifier)));
             menu.AddElement(new MenuButton("Reset", 
                                             "",
                                             submitAction => {
@@ -43,6 +49,11 @@ namespace BetterCrystalHeart
             menuScreen = menu.GetMenuScreen(modListMenu);
 
             return menuScreen;
+        }
+
+        private static string[] MenuValues()
+        {
+            return new string[] { "OFF", "ON" };
         }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using DanielSteginkUtils.Utilities;
 using Modding;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -9,7 +10,7 @@ namespace BetterCrystalHeart
     {
         public static BetterCrystalHeart Instance;
 
-        public override string GetVersion() => "1.1.1.0";
+        public override string GetVersion() => "1.2.0.0";
 
         #region Save Settings
         internal static GlobalSettings globalSettings = new GlobalSettings();
@@ -25,18 +26,49 @@ namespace BetterCrystalHeart
         }
         #endregion
 
+        #region Variables
+        /// <summary>
+        /// Tracks if Dynamic Crystal Dash is installed
+        /// </summary>
+        private bool dynamicCDash;
+
+        /// <summary>
+        /// Stores the default CDash speed
+        /// </summary>
+        private float defaultSpeed;
+        #endregion
+
         public override void Initialize(Dictionary<string, Dictionary<string, GameObject>> preloadedObjects)
         {
             Log("Initializing");
 
             Instance = this;
 
+            IMod mod = ModHooks.GetMod("DynamicCrystalDash");
+            dynamicCDash = mod != null;
+
+            On.HutongGames.PlayMaker.Fsm.Awake += OnFsmAwake;
             On.HutongGames.PlayMaker.Actions.ListenForSuperdash.OnEnter += RemoveDelay;
             On.HutongGames.PlayMaker.Actions.Wait.OnEnter += ChargeTime;
             On.HealthManager.Start += StoreMaxHealth;
             On.HealthManager.TakeDamage += Damage;
 
             Log("Initialized");
+        }
+
+        /// <summary>
+        /// For integration with Dynamic Crystal Dash, we need to track the default speed for CDash
+        /// </summary>
+        /// <param name="orig"></param>
+        /// <param name="self"></param>
+        private void OnFsmAwake(On.HutongGames.PlayMaker.Fsm.orig_Awake orig, HutongGames.PlayMaker.Fsm self)
+        {
+            orig(self);
+
+            if (self.Name.Equals("Superdash"))
+            {
+                defaultSpeed = self.Variables.GetFsmFloat("Superdash Speed").Value;
+            }
         }
 
         /// <summary>
@@ -103,6 +135,22 @@ namespace BetterCrystalHeart
         /// <returns></returns>
         private float GetTimeModifier()
         {
+            float modifier = GetSpeedCharmModifier();
+            //Log($"CDash charge time: {speedBoostPerNotch} * {notchValue} / 3 = {modifier}");
+
+            // Apply user-set percentile bonus (or penalty)
+            float globalModifier = 1 + (globalSettings.TimeModifier / 100); // 100% to double, -100% to negate
+            modifier *= globalModifier;
+
+            return 1 - modifier;
+        }
+
+        /// <summary>
+        /// Gets the modifier to apply for speed-based charms
+        /// </summary>
+        /// <returns></returns>
+        private float GetSpeedCharmModifier()
+        {
             // Although Crystal Dash instinctively feels like a dash, it is actually closer to a nail art
             // NMG costs 1 notch to reduce the charge time of nail arts by 44%
             float speedBoostPerNotch = 1 - 0.75f / 1.35f;
@@ -111,11 +159,8 @@ namespace BetterCrystalHeart
             // A little personal adjustment based on my tastes
             speedBoostPerNotch /= 2f;
 
-            // Since this is a synergy rather than the intended effect of the charms,
-            // let's say it takes 3 notches worth of charms to achieve 1 notch of cooldown
-            float notchValue = 0;
-
             // Sprintmaster costs 1 notch
+            float notchValue = 0;
             if (PlayerData.instance.GetBool("equippedCharm_37"))
             {
                 notchValue += 1;
@@ -133,14 +178,11 @@ namespace BetterCrystalHeart
                 notchValue += 3;
             }
 
-            float modifier = speedBoostPerNotch * notchValue / 3f;
-            //Log($"CDash charge time: {speedBoostPerNotch} * {notchValue} / 3 = {modifier}");
+            // Since this is a synergy rather than the intended effect of the charms,
+            // let's say it takes 3 notches worth of charms to achieve 1 notch of cooldown
+            notchValue /= 3f;
 
-            // Apply user-set percentile bonus (or penalty)
-            float globalModifier = 1 + (globalSettings.TimeModifier / 100); // 100% to double, -100% to negate
-            modifier *= globalModifier;
-
-            return 1 - modifier;
+            return speedBoostPerNotch * notchValue;
         }
         #endregion
 
@@ -208,12 +250,20 @@ namespace BetterCrystalHeart
             // It also makes some sense to buff CDash based on our nail, since Sharp Shadow works that way
             bonusDamage += PlayerData.instance.GetInt("nailDamage");
 
-            bonusDamage *= GetCharmBonus();
-            //Log($"CDash charm damage: {charmModifier} -> {bonusDamage}");
+            // And we need to consider bonus damage from charms
+            bonusDamage *= GetDamageCharmBonus();
 
             // A little personal adjustment based on my tastes
             bonusDamage /= 1.5f;
             //Log($"CDash final damage: {bonusDamage}");
+
+            // And a synergy bonus with Dynamic Crystal Dash
+            if (dynamicCDash &&
+                globalSettings.DynamicModifier)
+            {
+                bonusDamage *= GetDynamicBonus();
+                //Log($"CDash modded damage: {bonusDamage}");
+            }
 
             // Apply user-set percentile bonus (or penalty)
             float globalModifier = 1 + (globalSettings.DamageModifier / 100); // 100% to double, -100% to negate
@@ -247,22 +297,45 @@ namespace BetterCrystalHeart
         /// Gets the damage modifier to apply based on charms equipped
         /// </summary>
         /// <returns></returns>
-        private float GetCharmBonus()
+        private float GetDamageCharmBonus()
         {
             // Crystal Dash charges like a Nail Art, so it makes sense to buff its damage like one
             // Per my Utils, 1 notch is worth a 27% increase in Nail Art damage
             float damageBoostPerNotch = NotchCosts.NailArtDamagePerNotch();
 
-            // Since this is a synergy, let's say it takes 3 notches worth of charms to achieve 1 notch of damage boost
-            float notchValue = 0;
-
             // Deep Focus is worth 4 notches
+            float notchValue = 0;
             if (PlayerData.instance.GetBool("equippedCharm_34"))
             {
                 notchValue += 4;
             }
 
-            return 1 + damageBoostPerNotch * notchValue / 3;
+            // Since this is a synergy, let's say it takes 3 notches worth of charms to achieve 1 notch of damage boost
+            notchValue /= 3;
+
+            return 1 + damageBoostPerNotch * notchValue;
+        }
+
+        /// <summary>
+        /// If Dynamic Crystal Dash is equipped, we want to apply a synergy by making CDash do more damage based on your
+        /// total speed
+        /// </summary>
+        /// <returns></returns>
+        private float GetDynamicBonus()
+        {
+            float currentSpeed = HKMirror.Reflection.SingletonClasses.HeroControllerR.rb2d.velocity.x;
+            float modifier = Math.Abs(currentSpeed / defaultSpeed);
+
+            // If Dynamic CDash is equipped, Quick Focus isn't going to supplement our speed here
+            // So instead, we will apply an additional damage bonus with it
+            float charmModifier = GetSpeedCharmModifier();
+
+            // This gets a little broken, so I'm gonna curb the damage
+            modifier--;
+            modifier /= 4;
+            modifier++;
+
+            return modifier / (1 - charmModifier);
         }
         #endregion
 
